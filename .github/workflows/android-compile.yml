@@ -200,9 +200,134 @@ jobs:
           path: ./flutter/build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
 
+  universal-lib:
+    name: universal lib ${{ matrix.abi }}
+    needs: [generate-bridge]
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs['universal-apk'] }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - abi: arm64-v8a
+            target: aarch64-linux-android
+            script: ./flutter/ndk_arm64.sh
+            vcpkg_abi: arm64-v8a
+          - abi: armeabi-v7a
+            target: armv7-linux-androideabi
+            script: ./flutter/ndk_arm.sh
+            vcpkg_abi: armeabi-v7a
+          - abi: x86_64
+            target: x86_64-linux-android
+            script: ./flutter/ndk_x64.sh
+            vcpkg_abi: x86_64
+    steps:
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+        with:
+          tool-cache: false
+          android: false
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: true
+          swap-storage: false
+
+      - name: Checkout source code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+
+      - name: Restore bridge files
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bridge-artifact
+          path: ./
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang \
+            cmake \
+            curl \
+            gcc-multilib \
+            git \
+            g++ \
+            g++-multilib \
+            libasound2-dev \
+            libc6-dev \
+            libclang-dev \
+            libssl-dev \
+            libunwind-dev \
+            libva-dev \
+            llvm-dev \
+            nasm \
+            ninja-build \
+            openjdk-17-jdk-headless \
+            pkg-config \
+            unzip \
+            wget \
+            zip
+
+      - uses: nttld/setup-ndk@ed92fe6cadad69be94a966a7ee3271275e62f779 # v1
+        id: setup-ndk
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+          add-to-path: true
+
+      - name: Setup vcpkg with Github Actions binary cache
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
+        with:
+          vcpkgDirectory: /opt/artifacts/vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+
+      - name: Install Android vcpkg dependencies
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          if ! ./flutter/build_android_deps.sh "${{ matrix.vcpkg_abi }}"; then
+            find "${VCPKG_ROOT}/" -name "*.log" | while read -r log; do
+              echo "$log:"
+              echo "======"
+              cat "$log"
+              echo "======"
+              echo ""
+            done
+            exit 1
+          fi
+        shell: bash
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          prefix-key: android-universal-lib
+          key: ${{ matrix.target }}
+
+      - name: Build Rust library
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          cargo install cargo-ndk --version ${{ env.CARGO_NDK_VERSION }} --locked
+          ${{ matrix.script }}
+
+      - name: Upload Rust library
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: librustdesk.so.${{ matrix.target }}
+          path: ./target/${{ matrix.target }}/release/liblibrustdesk.so
+          if-no-files-found: error
+
   universal-apk:
     name: universal release APK
-    needs: [generate-bridge]
+    needs: [generate-bridge, universal-lib]
     if: ${{ github.event_name == 'workflow_dispatch' && inputs['universal-apk'] }}
     runs-on: ubuntu-24.04
     steps:
@@ -216,13 +341,6 @@ jobs:
           large-packages: false
           docker-images: true
           swap-storage: false
-
-      - name: Export GitHub Actions cache environment variables
-        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
-        with:
-          script: |
-            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
 
       - name: Checkout source code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -274,60 +392,23 @@ jobs:
           ndk-version: ${{ env.NDK_VERSION }}
           add-to-path: true
 
-      - name: Setup vcpkg with Github Actions binary cache
-        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
+      - name: Download arm64-v8a library
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          vcpkgDirectory: /opt/artifacts/vcpkg
-          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          name: librustdesk.so.aarch64-linux-android
+          path: ./flutter/android/app/src/main/jniLibs/arm64-v8a
 
-      - name: Install Android vcpkg dependencies
-        env:
-          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: |
-          for abi in arm64-v8a armeabi-v7a x86_64; do
-            if ! ./flutter/build_android_deps.sh "${abi}"; then
-              find "${VCPKG_ROOT}/" -name "*.log" | while read -r log; do
-                echo "$log:"
-                echo "======"
-                cat "$log"
-                echo "======"
-                echo ""
-              done
-              exit 1
-            fi
-          done
-        shell: bash
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+      - name: Download armeabi-v7a library
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          toolchain: ${{ env.RUST_VERSION }}
-          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+          name: librustdesk.so.armv7-linux-androideabi
+          path: ./flutter/android/app/src/main/jniLibs/armeabi-v7a
 
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Download x86_64 library
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          prefix-key: android-universal-apk
-          key: arm64-armv7-x64
-
-      - name: Build Rust libraries
-        env:
-          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: |
-          cargo install cargo-ndk --version ${{ env.CARGO_NDK_VERSION }} --locked
-          ./flutter/ndk_arm64.sh
-          ./flutter/ndk_arm.sh
-          ./flutter/ndk_x64.sh
-          mkdir -p ./flutter/android/app/src/main/jniLibs/arm64-v8a
-          mkdir -p ./flutter/android/app/src/main/jniLibs/armeabi-v7a
-          mkdir -p ./flutter/android/app/src/main/jniLibs/x86_64
-          cp ./target/aarch64-linux-android/release/liblibrustdesk.so \
-            ./flutter/android/app/src/main/jniLibs/arm64-v8a/librustdesk.so
-          cp ./target/armv7-linux-androideabi/release/liblibrustdesk.so \
-            ./flutter/android/app/src/main/jniLibs/armeabi-v7a/librustdesk.so
-          cp ./target/x86_64-linux-android/release/liblibrustdesk.so \
-            ./flutter/android/app/src/main/jniLibs/x86_64/librustdesk.so
+          name: librustdesk.so.x86_64-linux-android
+          path: ./flutter/android/app/src/main/jniLibs/x86_64
 
       - name: Build universal APK
         shell: bash
@@ -337,6 +418,10 @@ jobs:
           ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
           export PATH=/usr/lib/jvm/java-17-openjdk-amd64/bin:$PATH
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            mv "./flutter/android/app/src/main/jniLibs/${abi}/liblibrustdesk.so" \
+              "./flutter/android/app/src/main/jniLibs/${abi}/librustdesk.so"
+          done
           NDK_LIBS="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib"
           cp "${NDK_LIBS}/aarch64-linux-android/libc++_shared.so" \
             ./flutter/android/app/src/main/jniLibs/arm64-v8a/
