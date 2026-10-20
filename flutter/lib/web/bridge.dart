@@ -931,6 +931,11 @@ class RustdeskImpl {
     return false;
   }
 
+  String mainClearRememberedLanCredential(
+      {required String fingerprint, dynamic hint}) {
+    return 'LAN credentials are not supported in the web client';
+  }
+
   String mainImportLegacyLanCredential(
       {required String fingerprint,
       required String name,

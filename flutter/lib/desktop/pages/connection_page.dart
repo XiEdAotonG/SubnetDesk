@@ -15,6 +15,7 @@ import 'package:window_manager/window_manager.dart';
 
 import '../../common.dart';
 import '../../common/formatter/id_formatter.dart';
+import '../../common/lan_credentials.dart';
 import '../../common/widgets/peer_tab_page.dart';
 import '../../models/favorite_group_model.dart';
 import '../../models/platform_model.dart';
@@ -767,12 +768,11 @@ class _ConnectionPageState extends State<ConnectionPage> with WindowListener {
         ? buildLanIdentityPayload(identityId, bindIdentity: bindIdentity)
         : password.isEmpty
         ? null
-        : jsonEncode({
-            'lan_version': 1,
-            'username': username,
-            'password': password,
-            'remember': _rememberPassword,
-          });
+        : buildLanPasswordPayload(
+            username: username,
+            password: password,
+            remember: _rememberPassword,
+          );
     await connect(
       context,
       endpoint,

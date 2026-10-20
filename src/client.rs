@@ -24,7 +24,7 @@ use std::{
         Arc, Mutex, RwLock,
     },
 };
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 #[cfg(feature = "unix-file-copy-paste")]
 use crate::{clipboard::check_clipboard_files, clipboard_file::unix_file_clip};
@@ -110,8 +110,6 @@ pub const LOGIN_MSG_PASSWORD_WRONG: &str = "Wrong Password";
 pub const LOGIN_MSG_LAN_CREDENTIALS_WRONG: &str = "Username or password is incorrect";
 const LAN_CREDENTIAL_CONFIG_PREFIX: &str = "lan-credential-";
 const LAN_CREDENTIAL_USERNAME_OPTION: &str = "lan-access-username";
-#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
-const LAN_CREDENTIAL_KEYRING_SERVICE: &str = "com.zibochen.SubnetDesk.LANCredentials";
 pub const LOGIN_MSG_OFFLINE: &str = "Offline";
 pub const LOGIN_SCREEN_WAYLAND: &str = "Wayland login screen is not supported";
 
@@ -128,7 +126,7 @@ fn lan_credential_config_id_for_fingerprint(fingerprint: &str) -> Option<String>
 
 pub(crate) fn load_remembered_lan_credential_for_fingerprint(
     fingerprint: &str,
-) -> Option<(String, Vec<u8>)> {
+) -> Option<(String, Zeroizing<Vec<u8>>)> {
     let config_id = lan_credential_config_id_for_fingerprint(fingerprint)?;
     let config = PeerConfig::load(&config_id);
     let username = config
@@ -138,48 +136,35 @@ pub(crate) fn load_remembered_lan_credential_for_fingerprint(
     if hbb_common::lan::validate_username(&username).is_err() {
         return None;
     }
-    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
-    {
-        let entry = match keyring::Entry::new(LAN_CREDENTIAL_KEYRING_SERVICE, &config_id) {
-            Ok(entry) => entry,
-            Err(err) => {
-                log::warn!("Failed to open the operating system credential store: {err}");
-                return None;
-            }
-        };
-        let mut password = match entry.get_password() {
-            Ok(password) => password,
-            Err(keyring::Error::NoEntry) => return None,
-            Err(err) => {
-                log::warn!("Failed to read the remembered LAN credential: {err}");
-                return None;
-            }
-        };
-        if hbb_common::lan::validate_password(password.as_bytes()).is_err() {
-            password.zeroize();
+    let password = match crate::credential_store::load(
+        crate::credential_store::LAN_CREDENTIAL_SERVICE,
+        &config_id,
+    ) {
+        Ok(Some(password)) => password,
+        Ok(None) => return None,
+        Err(err) => {
+            log::warn!("Failed to read the remembered LAN credential: {err}");
             return None;
         }
-        let password_bytes = password.as_bytes().to_vec();
-        password.zeroize();
-        Some((username, password_bytes))
+    };
+    if hbb_common::lan::validate_password(password.as_slice()).is_err() {
+        return None;
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    {
-        None
-    }
+    Some((username, password))
 }
 
-pub(crate) fn clear_remembered_lan_credential_for_fingerprint(fingerprint: &str) {
-    if let Some(config_id) = lan_credential_config_id_for_fingerprint(fingerprint) {
-        #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
-        match keyring::Entry::new(LAN_CREDENTIAL_KEYRING_SERVICE, &config_id)
-            .and_then(|entry| entry.delete_password())
-        {
-            Ok(()) | Err(keyring::Error::NoEntry) => {}
-            Err(err) => log::warn!("Failed to delete the remembered LAN credential: {err}"),
-        }
-        PeerConfig::remove(&config_id);
-    }
+pub(crate) fn clear_remembered_lan_credential_for_fingerprint(
+    fingerprint: &str,
+) -> ResultType<()> {
+    let Some(config_id) = lan_credential_config_id_for_fingerprint(fingerprint) else {
+        return Ok(());
+    };
+    let result = crate::credential_store::delete(
+        crate::credential_store::LAN_CREDENTIAL_SERVICE,
+        &config_id,
+    );
+    PeerConfig::remove(&config_id);
+    result
 }
 #[cfg(target_os = "linux")]
 pub const SCRAP_UBUNTU_HIGHER_REQUIRED: &str = "ubuntu-21-04-required";
@@ -1241,7 +1226,7 @@ impl LoginConfigHandler {
         lan_credential_config_id_for_fingerprint(&self.lan_fingerprint)
     }
 
-    pub fn load_remembered_lan_credential(&self) -> Option<(String, Vec<u8>)> {
+    pub fn load_remembered_lan_credential(&self) -> Option<(String, Zeroizing<Vec<u8>>)> {
         load_remembered_lan_credential_for_fingerprint(&self.lan_fingerprint)
     }
 
@@ -1250,27 +1235,19 @@ impl LoginConfigHandler {
         username: &str,
         password: &[u8],
     ) -> ResultType<()> {
+        if !crate::credential_store::is_supported() {
+            bail!("Remembering LAN passwords is not supported on this platform");
+        }
         let config_id = self
             .lan_credential_config_id()
             .ok_or_else(|| anyhow!("LAN device fingerprint is not available"))?;
         let username = hbb_common::lan::validate_username(username)?;
         hbb_common::lan::validate_password(password)?;
-        #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
-        {
-            let password = std::str::from_utf8(password)
-                .map_err(|_| anyhow!("LAN password is not valid UTF-8"))?;
-            keyring::Entry::new(LAN_CREDENTIAL_KEYRING_SERVICE, &config_id)
-                .map_err(|err| {
-                    anyhow!("Failed to open the operating system credential store: {err}")
-                })?
-                .set_password(password)
-                .map_err(|err| anyhow!("Failed to save the LAN credential: {err}"))?;
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-        {
-            let _ = password;
-            bail!("Remembering LAN passwords is not supported on this platform");
-        }
+        crate::credential_store::store(
+            crate::credential_store::LAN_CREDENTIAL_SERVICE,
+            &config_id,
+            password,
+        )?;
         let mut config = PeerConfig::load(&config_id);
         config.password.clear();
         config
@@ -1280,8 +1257,8 @@ impl LoginConfigHandler {
         Ok(())
     }
 
-    pub fn clear_remembered_lan_credential(&self) {
-        clear_remembered_lan_credential_for_fingerprint(&self.lan_fingerprint);
+    pub fn clear_remembered_lan_credential(&self) -> ResultType<()> {
+        clear_remembered_lan_credential_for_fingerprint(&self.lan_fingerprint)
     }
 
     /// Set an option for handler's [`PeerConfig`].
@@ -2677,7 +2654,9 @@ pub async fn handle_login_error(
         true
     } else if err == LOGIN_MSG_LAN_CREDENTIALS_WRONG {
         if let Err(err) = tokio::task::spawn_blocking(move || {
-            lc.read().unwrap().clear_remembered_lan_credential();
+            if let Err(err) = lc.read().unwrap().clear_remembered_lan_credential() {
+                log::warn!("Failed to clear the remembered LAN credential: {err}");
+            }
         })
         .await
         {

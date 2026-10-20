@@ -1810,7 +1810,9 @@ impl<T: InvokeUiSession> Interface for Session<T> {
                         interface.msgbox("error", "Failed", "Remember password", "");
                     }
                 } else {
-                    lc.clear_remembered_lan_credential();
+                    if let Err(err) = lc.clear_remembered_lan_credential() {
+                        log::warn!("Failed to clear the remembered LAN credential: {err}");
+                    }
                 }
             });
         }
@@ -1909,7 +1911,7 @@ impl<T: InvokeUiSession> Interface for Session<T> {
             if let Some((username, password)) = remembered {
                 let remembered = LanSessionCredential {
                     username,
-                    password,
+                    password: password.to_vec(),
                     remember: true,
                     identity_id: String::new(),
                     bind_identity_on_success: false,

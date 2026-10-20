@@ -718,72 +718,22 @@ abstract class BasePeerCard extends StatelessWidget {
   Future<List<MenuEntryBase<String>>> _lanIdentityActions(
     BuildContext context,
   ) async {
-    if (!isDesktop) return const [];
-    final actions = <MenuEntryBase<String>>[
-      MenuEntryButton<String>(
-        childBuilder: (TextStyle? style) => Text(
-          '${translate('Connect')} · ${translate('Account')}',
-          style: style,
-        ),
-        proc: () {
-          () async {
-            final identityId = await showLanIdentityPicker(
-              context,
-              fingerprint: peer.fingerprint,
-            );
-            if (identityId == null || !context.mounted) return;
-            connectInPeerTab(context, peer, tab, identityId: identityId);
-          }();
-        },
-        padding: menuPadding,
-        dismissOnClicked: true,
-      ),
-    ];
-
-    if (peer.fingerprint.isEmpty) return actions;
-    final boundIdentityId = bind.mainGetBoundLanIdentityId(
-      fingerprint: peer.fingerprint,
-    );
-    if (boundIdentityId.isNotEmpty) {
+    final actions = <MenuEntryBase<String>>[];
+    if (isDesktop) {
       actions.add(
         MenuEntryButton<String>(
           childBuilder: (TextStyle? style) => Text(
-            '${translate('Remove')} · ${translate('Account')}',
-            style: style,
-          ),
-          proc: () {
-            final error = bind.mainBindLanIdentity(
-              fingerprint: peer.fingerprint,
-              identityId: '',
-            );
-            showToast(error.isEmpty ? translate('Successful') : error);
-          },
-          padding: menuPadding,
-          dismissOnClicked: true,
-        ),
-      );
-    }
-    if (bind.mainHasLegacyLanCredential(fingerprint: peer.fingerprint)) {
-      actions.add(
-        MenuEntryButton<String>(
-          childBuilder: (TextStyle? style) => Text(
-            '${translate('Add')} · ${translate('Account')}',
+            '${translate('Connect')} · ${translate('Account')}',
             style: style,
           ),
           proc: () {
             () async {
-              final identityId = await showImportLegacyLanCredentialDialog(
+              final identityId = await showLanIdentityPicker(
                 context,
                 fingerprint: peer.fingerprint,
-                suggestedName: peer.alias.isNotEmpty
-                    ? peer.alias
-                    : peer.hostname.isNotEmpty
-                    ? peer.hostname
-                    : peer.id,
               );
-              if (identityId != null) {
-                showToast(translate('Successful'));
-              }
+              if (identityId == null || !context.mounted) return;
+              connectInPeerTab(context, peer, tab, identityId: identityId);
             }();
           },
           padding: menuPadding,
@@ -791,7 +741,107 @@ abstract class BasePeerCard extends StatelessWidget {
         ),
       );
     }
+
+    if (peer.fingerprint.isEmpty) return actions;
+    final hasRememberedPassword =
+        bind.mainHasLegacyLanCredential(fingerprint: peer.fingerprint);
+    if (isDesktop) {
+      final boundIdentityId = bind.mainGetBoundLanIdentityId(
+        fingerprint: peer.fingerprint,
+      );
+      if (boundIdentityId.isNotEmpty) {
+        actions.add(
+          MenuEntryButton<String>(
+            childBuilder: (TextStyle? style) => Text(
+              '${translate('Remove')} · ${translate('Account')}',
+              style: style,
+            ),
+            proc: () {
+              final error = bind.mainBindLanIdentity(
+                fingerprint: peer.fingerprint,
+                identityId: '',
+              );
+              showToast(error.isEmpty ? translate('Successful') : error);
+            },
+            padding: menuPadding,
+            dismissOnClicked: true,
+          ),
+        );
+      }
+      if (hasRememberedPassword) {
+        actions.add(
+          MenuEntryButton<String>(
+            childBuilder: (TextStyle? style) => Text(
+              '${translate('Add')} · ${translate('Account')}',
+              style: style,
+            ),
+            proc: () {
+              () async {
+                final identityId = await showImportLegacyLanCredentialDialog(
+                  context,
+                  fingerprint: peer.fingerprint,
+                  suggestedName: peer.alias.isNotEmpty
+                      ? peer.alias
+                      : peer.hostname.isNotEmpty
+                      ? peer.hostname
+                      : peer.id,
+                );
+                if (identityId != null) {
+                  showToast(translate('Successful'));
+                }
+              }();
+            },
+            padding: menuPadding,
+            dismissOnClicked: true,
+          ),
+        );
+      }
+    }
+    if (hasRememberedPassword) {
+      actions.add(_forgetRememberedPasswordAction(context));
+    }
     return actions;
+  }
+
+  MenuEntryBase<String> _forgetRememberedPasswordAction(BuildContext context) {
+    final label = peer.alias.isNotEmpty
+        ? peer.alias
+        : peer.hostname.isNotEmpty
+        ? peer.hostname
+        : formatID(peer.id);
+    return MenuEntryButton<String>(
+      childBuilder: (TextStyle? style) =>
+          Text(translate('Forget saved password'), style: style),
+      proc: () {
+        () async {
+          final forget = await showDialog<bool>(
+                context: context,
+                builder: (dialogContext) => AlertDialog(
+                  title: Text(translate('Forget saved password')),
+                  content: Text(label),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.of(dialogContext).pop(false),
+                      child: Text(translate('Cancel')),
+                    ),
+                    ElevatedButton(
+                      onPressed: () => Navigator.of(dialogContext).pop(true),
+                      child: Text(translate('OK')),
+                    ),
+                  ],
+                ),
+              ) ??
+              false;
+          if (!forget) return;
+          final error = bind.mainClearRememberedLanCredential(
+            fingerprint: peer.fingerprint,
+          );
+          showToast(error.isEmpty ? translate('Successful') : error);
+        }();
+      },
+      padding: menuPadding,
+      dismissOnClicked: true,
+    );
   }
 
   @protected

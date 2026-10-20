@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:auto_size_text_field/auto_size_text_field.dart';
 import 'package:flutter/material.dart';
@@ -10,6 +9,7 @@ import 'package:provider/provider.dart';
 import 'package:flutter_hbb/models/peer_model.dart';
 
 import '../../common.dart';
+import '../../common/lan_credentials.dart';
 import '../../common/widgets/peer_tab_page.dart';
 import '../../common/widgets/autocomplete.dart';
 import '../../consts.dart';
@@ -46,6 +46,7 @@ class _ConnectionPageState extends State<ConnectionPage>
   final TextEditingController _idEditingController = TextEditingController();
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
+  bool _rememberPassword = false;
 
   final AllPeersLoader _allPeersLoader = AllPeersLoader();
 
@@ -144,12 +145,11 @@ class _ConnectionPageState extends State<ConnectionPage>
       isTerminal: isTerminal,
       password: password.isEmpty
           ? null
-          : jsonEncode({
-              'lan_version': 1,
-              'username': username,
-              'password': password,
-              'remember': false,
-            }),
+          : buildLanPasswordPayload(
+              username: username,
+              password: password,
+              remember: _rememberPassword,
+            ),
     );
     _passwordController.clear();
   }
@@ -415,6 +415,15 @@ class _ConnectionPageState extends State<ConnectionPage>
           ),
           onSubmitted: (_) => onConnect(),
         ).marginSymmetric(horizontal: 4, vertical: 4),
+        CheckboxListTile(
+          value: _rememberPassword,
+          onChanged: (value) =>
+              setState(() => _rememberPassword = value == true),
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          controlAffinity: ListTileControlAffinity.leading,
+          title: Text(translate('Remember password')),
+        ).marginSymmetric(horizontal: 4),
         LayoutBuilder(
           builder: (context, constraints) {
             final singleColumn = constraints.maxWidth < 340;

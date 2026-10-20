@@ -1235,6 +1235,18 @@ pub fn main_has_legacy_lan_credential(fingerprint: String) -> SyncReturn<bool> {
     SyncReturn(crate::lan_identity::has_legacy_credential(&fingerprint))
 }
 
+pub fn main_clear_remembered_lan_credential(fingerprint: String) -> SyncReturn<String> {
+    if fingerprint.len() != 64 || !fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return SyncReturn("Invalid device fingerprint".to_owned());
+    }
+    SyncReturn(
+        crate::client::clear_remembered_lan_credential_for_fingerprint(&fingerprint)
+            .err()
+            .map(|err| err.to_string())
+            .unwrap_or_default(),
+    )
+}
+
 pub fn main_import_legacy_lan_credential(
     fingerprint: String,
     name: String,
@@ -2988,6 +3000,16 @@ pub mod server_side {
         log::debug!("startService from jvm");
         config::Config::set_option("stop-service".into(), "".into());
         crate::lan_server::LanServer::restart();
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_ffi_FFI_initCredentialStore(
+        mut env: JNIEnv,
+        _class: JClass,
+        ctx: JObject,
+    ) {
+        log::debug!("initCredentialStore from jvm");
+        crate::android_secure_store::init(&mut env, ctx);
     }
 
     #[no_mangle]

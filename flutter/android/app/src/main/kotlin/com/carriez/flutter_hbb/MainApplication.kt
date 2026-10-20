@@ -12,6 +12,7 @@ class MainApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "App start")
+        FFI.initCredentialStore(applicationContext)
         FFI.onAppStart(applicationContext)
     }
 }

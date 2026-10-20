@@ -20,6 +20,9 @@ pub mod ipc;
 mod diagnostics;
 mod lan;
 mod lan_identity;
+mod credential_store;
+#[cfg(target_os = "android")]
+mod android_secure_store;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod lan_mdns;
 mod lan_protocol;

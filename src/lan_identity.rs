@@ -6,11 +6,8 @@ use hbb_common::{
 };
 use serde::Serialize;
 use uuid::Uuid;
-use zeroize::{Zeroize, Zeroizing};
 
 const MAX_IDENTITY_NAME_LEN: usize = 64;
-#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
-const LAN_IDENTITY_KEYRING_SERVICE: &str = "com.zibochen.SubnetDesk.LANIdentities";
 
 #[derive(Debug, Serialize)]
 pub struct LanIdentitySummary {
@@ -49,12 +46,6 @@ fn validate_identity_id(identity_id: &str) -> ResultType<String> {
     Ok(identity_id)
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
-fn keyring_entry(identity_id: &str) -> ResultType<keyring::Entry> {
-    keyring::Entry::new(LAN_IDENTITY_KEYRING_SERVICE, identity_id)
-        .map_err(|err| anyhow!("Failed to open the operating system credential store: {err}"))
-}
-
 fn ensure_unique_name(name: &str, excluding_id: Option<&str>) -> ResultType<()> {
     if LocalConfig::lan_identity_name_exists(name, excluding_id) {
         bail!("An identity with this name already exists");
@@ -89,15 +80,12 @@ pub fn create(
     ensure_unique_name(&name, None)?;
     let identity_id = Uuid::new_v4().to_string();
 
-    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
-    keyring_entry(&identity_id)?
-        .set_password(password)
-        .map_err(|err| anyhow!("Failed to save the LAN identity password: {err}"))?;
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    {
-        let _ = password;
-        bail!("LAN identities are not supported on this platform");
-    }
+    crate::credential_store::store(
+        crate::credential_store::LAN_IDENTITY_SERVICE,
+        &identity_id,
+        password.as_bytes(),
+    )
+    .map_err(|err| anyhow!("Failed to save the LAN identity password: {err}"))?;
 
     let now = hbb_common::get_time();
     LocalConfig::store_lan_identity(LanIdentity {
@@ -129,15 +117,12 @@ pub fn update(
 
     if let Some(password) = password {
         validate_password(password.as_bytes())?;
-        #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
-        keyring_entry(&identity_id)?
-            .set_password(password)
-            .map_err(|err| anyhow!("Failed to update the LAN identity password: {err}"))?;
-        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-        {
-            let _ = password;
-            bail!("LAN identities are not supported on this platform");
-        }
+        crate::credential_store::store(
+            crate::credential_store::LAN_IDENTITY_SERVICE,
+            &identity_id,
+            password.as_bytes(),
+        )
+        .map_err(|err| anyhow!("Failed to update the LAN identity password: {err}"))?;
     }
 
     identity.name = name;
@@ -158,13 +143,11 @@ pub fn delete(identity_id: &str) -> ResultType<()> {
         bail!("LAN identity does not exist");
     }
 
-    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
-    match keyring_entry(&identity_id)?.delete_password() {
-        Ok(()) | Err(keyring::Error::NoEntry) => {}
-        Err(err) => bail!("Failed to delete the LAN identity password: {err}"),
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    bail!("LAN identities are not supported on this platform");
+    crate::credential_store::delete(
+        crate::credential_store::LAN_IDENTITY_SERVICE,
+        &identity_id,
+    )
+    .map_err(|err| anyhow!("Failed to delete the LAN identity password: {err}"))?;
 
     LocalConfig::remove_lan_identity(&identity_id);
     Ok(())
@@ -199,29 +182,18 @@ pub fn load(identity_id: &str) -> ResultType<ResolvedLanIdentity> {
     let identity = LocalConfig::get_lan_identity(&identity_id)
         .ok_or_else(|| anyhow!("LAN identity does not exist"))?;
 
-    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
-    {
-        let mut password =
-            keyring_entry(&identity_id)?
-                .get_password()
-                .map_err(|err| match err {
-                    keyring::Error::NoEntry => anyhow!("LAN identity password is missing"),
-                    _ => anyhow!("Failed to read the LAN identity password: {err}"),
-                })?;
-        if let Err(err) = validate_password(password.as_bytes()) {
-            password.zeroize();
-            return Err(err);
-        }
-        let password_bytes = password.as_bytes().to_vec();
-        password.zeroize();
-        Ok(ResolvedLanIdentity {
-            id: identity_id,
-            username: identity.username,
-            password: password_bytes,
-        })
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    bail!("LAN identities are not supported on this platform")
+    let password = crate::credential_store::load(
+        crate::credential_store::LAN_IDENTITY_SERVICE,
+        &identity_id,
+    )
+    .map_err(|err| anyhow!("Failed to read the LAN identity password: {err}"))?
+    .ok_or_else(|| anyhow!("LAN identity password is missing"))?;
+    validate_password(password.as_slice())?;
+    Ok(ResolvedLanIdentity {
+        id: identity_id,
+        username: identity.username,
+        password: password.to_vec(),
+    })
 }
 
 pub fn load_for_fingerprint(fingerprint: &str) -> ResultType<Option<ResolvedLanIdentity>> {
@@ -245,8 +217,7 @@ pub fn import_legacy_credential(
     let (username, password) =
         crate::client::load_remembered_lan_credential_for_fingerprint(fingerprint)
             .ok_or_else(|| anyhow!("No remembered credential exists for this device"))?;
-    let password = Zeroizing::new(password);
-    let password_text = std::str::from_utf8(&password)
+    let password_text = std::str::from_utf8(password.as_slice())
         .map_err(|_| anyhow!("Remembered LAN password is not valid UTF-8"))?;
     let identity_id = create(name, &username, password_text, make_default)?;
     if let Err(err) = bind(fingerprint, &identity_id) {
