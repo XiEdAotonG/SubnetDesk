@@ -85,12 +85,17 @@ jobs:
             clang \
             cmake \
             curl \
-            gcc \
+            gcc-multilib \
             git \
             g++ \
+            g++-multilib \
+            libasound2-dev \
+            libc6-dev \
             libclang-dev \
             libssl-dev \
-            make \
+            libunwind-dev \
+            libva-dev \
+            llvm-dev \
             nasm \
             ninja-build \
             openjdk-17-jdk-headless \
