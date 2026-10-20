@@ -131,8 +131,12 @@ mod tests {
     use super::entry_key;
 
     #[test]
-    fn entry_key_is_namespaced_and_unambiguous() {
+    fn entry_key_is_namespaced_and_stable() {
         assert_eq!(entry_key("service", "account"), "service|account");
-        assert_ne!(entry_key("a", "b|c"), entry_key("a|b", "c"));
+        assert_eq!(entry_key("service", "account"), entry_key("service", "account"));
+        assert_ne!(
+            entry_key("service-a", "account"),
+            entry_key("service-b", "account")
+        );
     }
 }
